@@ -1,0 +1,183 @@
+import express from "express";
+import { db } from "../server.js";
+import bcrypt from "bcrypt";
+import multer from "multer";
+import jwt from "jsonwebtoken";
+import authenticateToken from "../middleware/authenticateToken.js";
+
+import fs from "fs";
+import path from "path";
+import { promisify } from "util";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const router = express.Router();
+
+// Configure multer to store files in memory
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+// CONTROLLER FUNCTIONS
+// Register user
+const writeFile = promisify(fs.writeFile);
+
+const registerUser = async (req, res) => {
+  const { studentId, name, email, password, gender, idCard } = req.body;
+
+  if (!studentId || !name || !email || !password || !gender || !idCard) {
+    return res.status(400).json({ error: "All fields are required" });
+  }
+
+  try {
+    // Decode base64 image and save it to the filesystem
+    const imageBuffer = Buffer.from(
+      idCard.replace(/^data:image\/\w+;base64,/, ""),
+      "base64"
+    );
+    const imagePath = path.join(
+      __dirname,
+      "uploads",
+      `${Date.now()}-${studentId}.png`
+    );
+
+    // Ensure the uploads directory exists
+    const uploadsDir = path.join(__dirname, "uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir);
+    }
+
+    // Write the file to the filesystem
+    await writeFile(imagePath, imageBuffer);
+
+    // Store user data in the database, including the image path
+    const relativeImagePath = `uploads/${path.basename(imagePath)}`;
+
+    // hasing the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // storing to the database
+    db.query(
+      "INSERT INTO users (studentId, name, email, password, gender, idCard) VALUES (?, ?, ?, ?, ?, ?)",
+      [studentId, name, email, hashedPassword, gender, relativeImagePath],
+      (err, result) => {
+        if (err) {
+          console.error("Error inserting user:", err);
+
+          // Delete the image if the user registration fails
+          fs.unlink(imagePath, (unlinkErr) => {
+            if (unlinkErr) {
+              console.error("Error deleting image:", unlinkErr);
+            } else {
+              console.log("Unnecessary image deleted.");
+            }
+          });
+          return res.status(400).json({ error: err });
+        }
+        console.log("User registered successfully:", result);
+        return res.json({ message: "User registered successfully" });
+      }
+    );
+  } catch (err) {
+    console.error("Error:", err);
+
+    // Delete the image if the user registration fails
+    fs.unlink(imagePath, (unlinkErr) => {
+      if (unlinkErr) {
+        console.error("Error deleting image:", unlinkErr);
+      } else {
+        console.log("Unnecessary image deleted.");
+      }
+    });
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+// Login user
+const loginUser = async (req, res) => {
+  const { studentId, password } = req.body;
+
+  if (!studentId || !password) {
+    return res
+      .status(400)
+      .json({ error: "Student Id and password are required" });
+  }
+
+  try {
+    db.query(
+      "SELECT * FROM users WHERE studentId = ?",
+      [studentId],
+      async (err, result) => {
+        if (err) {
+          return res.status(400).json({ error: err });
+        }
+
+        if (result.length === 0) {
+          return res.status(400).json({ error: "User not found" });
+        }
+
+        const user = result[0];
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        if (!isMatch) {
+          return res.status(400).json({ error: "Invalid password" });
+        }
+
+        const token = jwt.sign(
+          {
+            studentId: user.studentId,
+            email: user.email,
+            type: user.type,
+            status: user.status,
+          },
+          process.env.JWT_SECRET
+        );
+
+        return res.json({
+          message: "Login successful",
+          token: token,
+          user: user,
+        });
+      }
+    );
+  } catch (err) {
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+// Get self data by token
+const selfData = async (req, res) => {
+  const { email } = req.user;
+
+  db.query("SELECT * FROM users WHERE email = ?", [email], (err, result) => {
+    if (err) {
+      return res.status(400).json({ error: err });
+    }
+    const { name, email, studentId, bio, dp, gender, type, idCard, status } =
+      result[0];
+    return res.json({
+      name,
+      email,
+      studentId,
+      bio,
+      dp,
+      gender,
+      type,
+      idCard,
+      status,
+    });
+  });
+};
+
+// ROUTES
+// POST register user
+router.post("/register", upload.single("idCard"), registerUser);
+
+// POST login user
+router.post("/login", loginUser);
+
+// GET user by token (self)
+router.get("/self", authenticateToken, selfData);
+
+export default router;
