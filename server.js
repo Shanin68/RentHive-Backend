@@ -20,7 +20,7 @@ export const db = mysql.createConnection({
   host: "localhost",
   user: "root",
   password: "",
-  database: "bachelor_point",
+  database: "rent_hive",
 });
 
 db.connect((err) => {

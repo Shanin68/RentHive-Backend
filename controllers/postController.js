@@ -5,13 +5,8 @@ import { promisify } from "util";
 import { fileURLToPath } from "url";
 import multer from "multer";
 import authenticateToken from "../middleware/authenticateToken.js";
-import {
-  addPost,
-  getAllPosts,
-  getPostById,
-  updatePost,
-  deletePost,
-} from "../models/postModel.js";
+import { db } from "../server.js";
+import { error } from "console";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,7 +21,7 @@ const writeFile = promisify(fs.writeFile);
 
 // CONTROLLER FUNCTIONS
 // Add post
-const addNewPost = async (req, res) => {
+const addPost = async (req, res) => {
   const { title, description, available_from, gender, rent, location, images } =
     req.body;
   const { studentId } = req.user;
@@ -78,17 +73,18 @@ const addNewPost = async (req, res) => {
     }
 
     // Store post data in the database, including the image paths
-    addPost(
-      {
+    db.query(
+      "INSERT INTO posts (title, description, available_from, gender, rent, location, images, posted_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
         title,
         description,
         available_from,
         gender,
         rent,
         location,
-        images: JSON.stringify(imagePaths),
-        posted_by: studentId,
-      },
+        JSON.stringify(imagePaths),
+        studentId,
+      ],
       (err, result) => {
         if (err) {
           console.error("Error inserting post:", err);
@@ -110,7 +106,7 @@ const getPosts = (req, res) => {
     return res.status(400).json({ error: "Your account is not approved yet!" });
   }
 
-  getAllPosts((err, result) => {
+  db.query("SELECT * FROM posts", (err, result) => {
     if (err) {
       console.error("Error fetching posts:", err);
       return res.status(400).json({ error: err });
@@ -120,14 +116,14 @@ const getPosts = (req, res) => {
 };
 
 // Get post by ID
-const getPostByIdHandler = (req, res) => {
+const getPostById = (req, res) => {
   const { id } = req.params;
 
   if (req.user.status === "not approved") {
     return res.status(400).json({ error: "Your account is not approved yet!" });
   }
 
-  getPostById(id, (err, result) => {
+  db.query("SELECT * FROM posts WHERE id = ?", [id], (err, result) => {
     if (err) {
       console.error("Error fetching post:", err);
       return res.status(400).json({ error: err });
@@ -158,10 +154,10 @@ const getOwnPost = (req, res) => {
 };
 
 // DELETE post
-const deletePostHandler = (req, res) => {
+const deletePost = (req, res) => {
   const { id } = req.params;
 
-  deletePost(id, (err, result) => {
+  db.query("DELETE FROM posts WHERE id = ?", [id], (err, result) => {
     if (err) {
       console.error("Error deleting post:", err);
       return res.status(400).json({ error: err });
@@ -174,7 +170,7 @@ const deletePostHandler = (req, res) => {
 };
 
 // Update post
-const updatePostHandler = async (req, res) => {
+const updatePost = async (req, res) => {
   const { title, description, available_from, gender, rent, location, images } =
     req.body;
   const { studentId } = req.user;
@@ -230,18 +226,19 @@ const updatePostHandler = async (req, res) => {
     // Store post data in the database, including the image paths
     const { id } = req.params;
 
-    updatePost(
-      {
+    db.query(
+      "UPDATE posts SET title = ?, description = ?, available_from = ?, gender = ?, rent = ?, location = ?, images = ? WHERE id = ? AND posted_by = ?",
+      [
         title,
         description,
         available_from,
         gender,
         rent,
         location,
-        images: JSON.stringify(imagePaths),
-      },
-      id,
-      studentId,
+        JSON.stringify(imagePaths),
+        id,
+        studentId,
+      ],
       (err, result) => {
         if (err) {
           console.error("Error updating post:", err);
@@ -264,7 +261,7 @@ const updatePostHandler = async (req, res) => {
 
 // ROUTES
 // Add post
-router.post("/add", authenticateToken, addNewPost);
+router.post("/add", authenticateToken, addPost);
 
 // GET All posts
 router.get("/all", authenticateToken, getPosts);
@@ -273,12 +270,12 @@ router.get("/all", authenticateToken, getPosts);
 router.get("/self", authenticateToken, getOwnPost);
 
 // UPDATE post
-router.put("/update/:id", authenticateToken, updatePostHandler);
+router.put("/update/:id", authenticateToken, updatePost);
 
 // GET post by ID
-router.get("/:id", authenticateToken, getPostByIdHandler);
+router.get("/:id", authenticateToken, getPostById);
 
 // Delete post
-router.delete("/:id", authenticateToken, deletePostHandler);
+router.delete("/:id", authenticateToken, deletePost);
 
 export default router;

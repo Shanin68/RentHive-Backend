@@ -4,17 +4,11 @@ import bcrypt from "bcrypt";
 import multer from "multer";
 import jwt from "jsonwebtoken";
 import authenticateToken from "../middleware/authenticateToken.js";
+
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { fileURLToPath } from "url";
-import {
-  getAllUsers,
-  registerUser,
-  getUserByStudentId,
-  updateUser,
-  deleteUser,
-} from "../models/userModel.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,7 +24,7 @@ const upload = multer({ storage });
 const allUsers = async (req, res) => {
   const { email } = req.user;
 
-  getAllUsers(email, (err, result) => {
+  db.query("SELECT * FROM users WHERE email = ?", [email], (err, result) => {
     if (err) {
       return res.status(400).json({ error: err });
     }
@@ -52,7 +46,7 @@ const allUsers = async (req, res) => {
 // Register user
 const writeFile = promisify(fs.writeFile);
 
-const registerNewUser = async (req, res) => {
+const registerUser = async (req, res) => {
   const { studentId, name, email, password, gender, idCard } = req.body;
 
   if (!studentId || !name || !email || !password || !gender || !idCard) {
@@ -87,13 +81,9 @@ const registerNewUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // storing to the database
-    registerUser(
-      studentId,
-      name,
-      email,
-      hashedPassword,
-      gender,
-      relativeImagePath,
+    db.query(
+      "INSERT INTO users (studentId, name, email, password, gender, idCard) VALUES (?, ?, ?, ?, ?, ?)",
+      [studentId, name, email, hashedPassword, gender, relativeImagePath],
       (err, result) => {
         if (err) {
           console.error("Error inserting user:", err);
@@ -138,38 +128,42 @@ const loginUser = async (req, res) => {
   }
 
   try {
-    getUserByStudentId(studentId, async (err, result) => {
-      if (err) {
-        return res.status(400).json({ error: err });
+    db.query(
+      "SELECT * FROM users WHERE studentId = ?",
+      [studentId],
+      async (err, result) => {
+        if (err) {
+          return res.status(400).json({ error: err });
+        }
+
+        if (result.length === 0) {
+          return res.status(400).json({ error: "User not found" });
+        }
+
+        const user = result[0];
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        if (!isMatch) {
+          return res.status(400).json({ error: "Invalid password" });
+        }
+
+        const token = jwt.sign(
+          {
+            studentId: user.studentId,
+            email: user.email,
+            type: user.type,
+            status: user.status,
+          },
+          process.env.JWT_SECRET
+        );
+
+        return res.json({
+          message: "Login successful",
+          token: token,
+          user: user,
+        });
       }
-
-      if (result.length === 0) {
-        return res.status(400).json({ error: "User not found" });
-      }
-
-      const user = result[0];
-      const isMatch = await bcrypt.compare(password, user.password);
-
-      if (!isMatch) {
-        return res.status(400).json({ error: "Invalid password" });
-      }
-
-      const token = jwt.sign(
-        {
-          studentId: user.studentId,
-          email: user.email,
-          type: user.type,
-          status: user.status,
-        },
-        process.env.JWT_SECRET
-      );
-
-      return res.json({
-        message: "Login successful",
-        token: token,
-        user: user,
-      });
-    });
+    );
   } catch (err) {
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -228,7 +222,7 @@ const approveUser = (req, res) => {
 };
 
 // Delete user by ID
-const deleteUserById = (req, res) => {
+const deleteUser = (req, res) => {
   const { email } = req.user;
   const { id } = req.params;
 
@@ -242,7 +236,7 @@ const deleteUserById = (req, res) => {
       return res.status(403).json({ error: "Access denied" });
     }
 
-    deleteUser(id, (err, result) => {
+    db.query("DELETE FROM users WHERE studentId = ?", [id], (err, result) => {
       if (err) {
         return res.status(400).json({ error: err });
       }
@@ -334,23 +328,27 @@ const updateUser = async (req, res) => {
     const relativeImagePath = `dp/${path.basename(imagePath)}`;
 
     // updating the database
-    updateUser(studentId, bio, relativeImagePath, (err, result) => {
-      if (err) {
-        console.error("Error updating user:", err);
+    db.query(
+      "UPDATE users SET bio = ?, dp = ? WHERE studentId = ?",
+      [bio, relativeImagePath, studentId],
+      (err, result) => {
+        if (err) {
+          console.error("Error updating user:", err);
 
-        // Delete the image if the user update fails
-        fs.unlink(imagePath, (unlinkErr) => {
-          if (unlinkErr) {
-            console.error("Error deleting image:", unlinkErr);
-          } else {
-            console.log("Unnecessary image deleted.");
-          }
-        });
-        return res.status(400).json({ error: err });
+          // Delete the image if the user update fails
+          fs.unlink(imagePath, (unlinkErr) => {
+            if (unlinkErr) {
+              console.error("Error deleting image:", unlinkErr);
+            } else {
+              console.log("Unnecessary image deleted.");
+            }
+          });
+          return res.status(400).json({ error: err });
+        }
+        console.log("Updated successfully:", result);
+        return res.json({ message: "Updated successfully" });
       }
-      console.log("Updated successfully:", result);
-      return res.json({ message: "Updated successfully" });
-    });
+    );
   } catch (err) {
     console.error("Error:", err);
 
@@ -443,7 +441,7 @@ const getContact = (req, res) => {
 router.get("/", authenticateToken, allUsers);
 
 // POST register user
-router.post("/register", upload.single("idCard"), registerNewUser);
+router.post("/register", upload.single("idCard"), registerUser);
 
 // POST login user
 router.post("/login", loginUser);
@@ -455,7 +453,7 @@ router.get("/self", authenticateToken, selfData);
 router.get("/approve/:id", authenticateToken, approveUser);
 
 // Delete user by ID
-router.delete("/delete/:id", authenticateToken, deleteUserById);
+router.delete("/delete/:id", authenticateToken, deleteUser);
 
 // Ban user by ID
 router.get("/ban/:id", authenticateToken, banUser);
