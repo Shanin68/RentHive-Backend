@@ -2,11 +2,18 @@ import express from "express";
 import dotenv from "dotenv";
 import mysql from "mysql";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
+
 import userController from "./controllers/userController.js";
+import postController from "./controllers/postController.js";
 
 dotenv.config();
 const PORT = process.env.PORT || 5001;
 const app = express();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Database Connection
 export const db = mysql.createConnection({
@@ -35,9 +42,16 @@ app.use(
     credentials: true,
   })
 );
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "controllers", "uploads"))
+);
+app.use("/dp", express.static(path.join(__dirname, "controllers", "dp")));
+app.use("/posts", express.static(path.join(__dirname, "controllers", "posts")));
 
 // Routes
 app.use("/api/users", userController);
+app.use("/api/posts", postController);
 
 // Server
 app.listen(PORT, () => console.log(`Server is running at port ${PORT}`));
